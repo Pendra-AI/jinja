@@ -94,6 +94,25 @@ func TestTojsonFilter(t *testing.T) {
 	}
 }
 
+func TestFromJSONFilter(t *testing.T) {
+	source := `{%- set data = data | from_json -%}{{ data.name }}:{{ data.value }}`
+	tmpl, err := jinja.Compile(source)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	result, err := tmpl.Render(map[string]any{
+		"data": `{"name":"test","value":42}`,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	if result != "test:42" {
+		t.Errorf("got %q, want %q", result, "test:42")
+	}
+}
+
 func TestNamespace(t *testing.T) {
 	source := `{%- set ns = namespace(found=false) -%}
 {%- for item in items -%}

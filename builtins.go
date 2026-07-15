@@ -183,6 +183,7 @@ func builtinCycler(args []Value, kwargs map[string]Value) (Value, error) {
 func registerFilters(s *scope) {
 	filters := map[string]func([]Value, map[string]Value) (Value, error){
 		"tojson":     filterTojson,
+		"from_json":  filterFromjson,
 		"fromjson":   filterFromjson,
 		"items":      filterItems,
 		"join":       filterJoin,
