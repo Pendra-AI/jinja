@@ -877,7 +877,7 @@ func (e *evaluator) evalCallExpr(n *callExpr) (Value, error) {
 	}
 
 	if !fn.IsCallable() {
-		return Undefined(), fmt.Errorf("value is not callable: %s", fn.String())
+		return Undefined(), fmt.Errorf("%s is not callable: %s", callableName(n.fn), fn.String())
 	}
 
 	args := make([]Value, len(n.args))
@@ -902,6 +902,22 @@ func (e *evaluator) evalCallExpr(n *callExpr) (Value, error) {
 	}
 
 	return fn.AsCallable().Fn(args, kwargs)
+}
+
+func callableName(ex expr) string {
+	switch n := ex.(type) {
+	case *nameExpr:
+		return n.name
+
+	case *attrExpr:
+		return callableName(n.obj) + "." + n.attr
+
+	case *itemExpr:
+		return callableName(n.obj) + "[item]"
+
+	default:
+		return ex.nodeType()
+	}
 }
 
 func (e *evaluator) evalFilter(n *filterExpr) (Value, error) {

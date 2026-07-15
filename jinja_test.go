@@ -113,6 +113,23 @@ func TestFromJSONFilter(t *testing.T) {
 	}
 }
 
+func TestUndefinedCallableErrorNamesExpression(t *testing.T) {
+	tmpl, err := jinja.Compile(`{{ args.items() }}`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	_, err = tmpl.Render(nil)
+	if err == nil {
+		t.Fatal("render: expected error")
+	}
+
+	const want = "args.items is not callable: Undefined"
+	if err.Error() != want {
+		t.Errorf("error: got %q, want %q", err, want)
+	}
+}
+
 func TestNamespace(t *testing.T) {
 	source := `{%- set ns = namespace(found=false) -%}
 {%- for item in items -%}
@@ -189,6 +206,106 @@ func TestDictMethods(t *testing.T) {
 	// Keys are sorted for deterministic output.
 	if !strings.Contains(result, "a=1") || !strings.Contains(result, "b=2") {
 		t.Errorf("unexpected dict items output: %q", result)
+	}
+}
+
+func TestFromJSONWithDictItems(t *testing.T) {
+	source := `{%- set func = tool['function'] -%}
+{%- set args = func['arguments'] -%}
+{%- if args is string -%}
+  {%- set args = args | from_json -%}
+{%- endif -%}
+{%- for key, val in args.items() -%}{{ key }}={{ val }}{%- endfor -%}`
+
+	tests := []struct {
+		name      string
+		arguments any
+		want      string
+	}{
+		{
+			name:      "json string",
+			arguments: `{"location":"New York City, NY"}`,
+			want:      "location=New York City, NY",
+		},
+		{
+			name:      "map",
+			arguments: map[string]any{"location": "New York City, NY"},
+			want:      "location=New York City, NY",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl, err := jinja.Compile(source)
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+
+			result, err := tmpl.Render(map[string]any{
+				"tool": map[string]any{
+					"function": map[string]any{
+						"name":      "get_weather",
+						"arguments": tt.arguments,
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+
+			if result != tt.want {
+				t.Errorf("result: got %q, want %q", result, tt.want)
+			}
+		})
+	}
+}
+
+func TestNestedRangePreservesOuterLoop(t *testing.T) {
+	source := `{%- for message in messages -%}
+{%- if message['role'] == 'assistant' -%}
+{%- set ep = namespace(idx=(loop.index0 - 1), done=false) -%}
+{%- for _i in range(loop.index0) -%}
+{%- if not ep.done and ep.idx >= 0 -%}
+{%- set ep.done = true -%}
+{%- endif -%}
+{%- endfor -%}
+{%- for tool in message['tool_calls'] -%}
+{%- set args = tool['function']['arguments'] -%}
+{%- if args is string -%}{%- set args = args | from_json -%}{%- endif -%}
+{%- for key, val in args.items() -%}{{ key }}={{ val }}{%- endfor -%}
+{%- endfor -%}
+{%- endif -%}
+{%- endfor -%}`
+
+	tmpl, err := jinja.Compile(source)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	result, err := tmpl.Render(map[string]any{
+		"messages": []map[string]any{
+			{"role": "user", "content": "weather"},
+			{
+				"role": "assistant",
+				"tool_calls": []map[string]any{
+					{
+						"function": map[string]any{
+							"name":      "get_weather",
+							"arguments": map[string]any{"location": "New York City, NY"},
+						},
+					},
+				},
+			},
+			{"role": "tool", "content": `{"temperature":"72°F"}`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	const want = "location=New York City, NY"
+	if result != want {
+		t.Errorf("result: got %q, want %q", result, want)
 	}
 }
 
