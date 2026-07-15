@@ -1,0 +1,52 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful weather assistant."
+    },
+    {
+      "role": "user",
+      "content": "What is the weather in New York City?"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_weather_1",
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": "{\"location\":\"New York City, NY\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_weather_1",
+      "name": "get_weather",
+      "content": "{\"temperature\":\"72°F\",\"condition\":\"sunny\"}"
+    }
+  ],
+  "tools": [
+    {
+      "function": {
+        "description": "Get the current weather for a location.",
+        "name": "get_weather",
+        "parameters": {
+          "properties": {
+            "location": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "location"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

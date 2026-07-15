@@ -62,6 +62,18 @@ func TestRequestsAgainstTemplates(t *testing.T) {
 						got = result
 					}
 
+					if templateName == "DeepSeek-V4-Flash" && reqName == "kronk-req-deepseek" {
+						for _, fragment := range []string{
+							`<｜DSML｜invoke name="get_weather">`,
+							`<｜DSML｜parameter name="location" string="true">New York City, NY</｜DSML｜parameter>`,
+							`<tool_result>{"temperature":"72°F","condition":"sunny"}</tool_result>`,
+						} {
+							if !strings.Contains(got, fragment) {
+								t.Errorf("rendered DeepSeek output missing %q", fragment)
+							}
+						}
+					}
+
 					key := templateName + "/" + reqName
 					want, ok := reference[key]
 					if !ok {

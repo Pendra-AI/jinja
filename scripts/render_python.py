@@ -73,6 +73,10 @@ def _tojson(x, ensure_ascii=False, indent=None, separators=None, sort_keys=False
     )
 
 
+def _from_json(x):
+    return json.loads(x)
+
+
 def _strftime_now(format):
     # Match the Go engine's strftime_now builtin (which calls time.Now()).
     return datetime.now().strftime(format)
@@ -85,6 +89,7 @@ def make_env() -> ImmutableSandboxedEnvironment:
         extensions=[jinja2.ext.loopcontrols, GenerationExtension],
     )
     env.filters["tojson"] = _tojson
+    env.filters["from_json"] = _from_json
     env.globals["raise_exception"] = _raise_exception
     env.globals["strftime_now"] = _strftime_now
     return env
