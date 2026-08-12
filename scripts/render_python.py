@@ -123,6 +123,25 @@ def render_one(env, template_src: str, ctx: dict) -> str:
         return f"RENDER ERROR: {e}\n"
 
 
+def normalize_tool_call_arguments(req: dict) -> None:
+    """Mirror Kronk's conversion of OpenAI JSON argument strings to maps."""
+    for message in req.get("messages", []):
+        if message.get("role") != "assistant":
+            continue
+        for tool_call in message.get("tool_calls", []):
+            function = tool_call.get("function", {})
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                    if isinstance(arguments, str):
+                        arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(arguments, dict) or arguments is None:
+                    function["arguments"] = arguments
+
+
 def main() -> int:
     env = make_env()
 
@@ -138,6 +157,8 @@ def main() -> int:
 
     # Pre-parse requests once, since we render every template against every one.
     parsed_requests = {p.stem: json.loads(p.read_text()) for p in requests}
+    for req in parsed_requests.values():
+        normalize_tool_call_arguments(req)
 
     out: dict[str, str] = {}
     for tpl_path in templates:

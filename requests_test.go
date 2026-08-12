@@ -181,10 +181,52 @@ func loadRequests(t testing.TB) map[string]map[string]any {
 		if err := dec.Decode(&req); err != nil {
 			t.Fatalf("unmarshal %q: %v", f, err)
 		}
+		normalizeToolCallArguments(req)
 		name := strings.TrimSuffix(filepath.Base(f), ".json")
 		requestFiles[name] = req
 	}
 	return requestFiles
+}
+
+// normalizeToolCallArguments mirrors Kronk's pre-render normalization of
+// OpenAI assistant tool calls. OpenAI request bodies encode function arguments
+// as JSON strings, while model templates such as GLM-5.2 iterate them as maps.
+func normalizeToolCallArguments(req map[string]any) {
+	messages, _ := req["messages"].([]any)
+	for _, value := range messages {
+		message, _ := value.(map[string]any)
+		if message["role"] != "assistant" {
+			continue
+		}
+		toolCalls, _ := message["tool_calls"].([]any)
+		for _, value := range toolCalls {
+			toolCall, _ := value.(map[string]any)
+			function, _ := toolCall["function"].(map[string]any)
+			arguments, ok := function["arguments"].(string)
+			if !ok {
+				continue
+			}
+
+			dec := json.NewDecoder(strings.NewReader(arguments))
+			dec.UseNumber()
+			var normalized any
+			if err := dec.Decode(&normalized); err != nil {
+				continue
+			}
+			if encoded, ok := normalized.(string); ok {
+				dec := json.NewDecoder(strings.NewReader(encoded))
+				dec.UseNumber()
+				if err := dec.Decode(&normalized); err != nil {
+					continue
+				}
+			}
+			argumentsMap, ok := normalized.(map[string]any)
+			if !ok && normalized != nil {
+				continue
+			}
+			function["arguments"] = argumentsMap
+		}
+	}
 }
 
 func sortedKeys(m map[string]map[string]any) []string {
