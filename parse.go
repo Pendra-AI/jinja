@@ -898,23 +898,28 @@ func applyTrimming(segs []segment) {
 				}
 			}
 		case applyDefaults:
-			for j := i - 1; j >= 0; j-- {
-				if segs[j].kind == segText {
-					// Treat the very first text segment in the
-					// template as if it were preceded by a newline
-					// (start of file == start of line) so that a
-					// template that opens with `   {% if %}...`
-					// strips the indentation, matching Jinja2.
-					isFirstText := true
-					for k := j - 1; k >= 0; k-- {
-						if segs[k].kind == segText {
-							isFirstText = false
-							break
-						}
-					}
-					segs[j].text = lstripBlock(segs[j].text, isFirstText)
-					break
-				}
+			// lstrip_blocks strips indentation between the previous
+			// newline and this block tag — but only the whitespace
+			// *immediately* before the tag. If the tag is not directly
+			// preceded by text (e.g. `{{ x }}{% endfor %}`), there is no
+			// such indentation and nothing to strip; searching past the
+			// intervening expression/tag would wrongly strip whitespace
+			// that belongs before that other segment.
+			if j := i - 1; j >= 0 && segs[j].kind == segText {
+				// atLineStart only matters when the adjacent text is
+				// pure indentation with no newline of its own (see
+				// lstripBlock). Because the scanner never emits two
+				// adjacent text segments, such a segment is at the
+				// start of a line iff it is the very first segment in
+				// the template (start of file == start of line): any
+				// preceding segment is a non-text tag/expression on the
+				// same line, which makes this block tag mid-line, so its
+				// indentation is significant and must not be stripped.
+				// This is why `   {% if %}...` at the top of a template
+				// strips its indentation but `{{ x }} {% endfor %}` does
+				// not (matching reference Jinja2).
+				atLineStart := j == 0
+				segs[j].text = lstripBlock(segs[j].text, atLineStart)
 			}
 		}
 	}
@@ -933,11 +938,14 @@ func applyTrimming(segs []segment) {
 				}
 			}
 		case applyDefaults:
-			for j := i + 1; j < len(segs); j++ {
-				if segs[j].kind == segText {
-					segs[j].text = trimBlockNewline(segs[j].text)
-					break
-				}
+			// trim_blocks removes a single newline *immediately* after
+			// the block tag's `%}`. If the tag is not directly followed
+			// by text (e.g. `{% for %}{{ x }}`), no newline follows it,
+			// so nothing is trimmed; searching past the intervening
+			// expression/tag would wrongly consume a newline that is
+			// loop-body content, not the one after the tag (#1800).
+			if i+1 < len(segs) && segs[i+1].kind == segText {
+				segs[i+1].text = trimBlockNewline(segs[i+1].text)
 			}
 		}
 	}
