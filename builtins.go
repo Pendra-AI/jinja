@@ -207,6 +207,7 @@ func registerFilters(s *scope) {
 		"string":     filterString,
 		"safe":       filterSafe,
 		"replace":    filterReplace,
+		"format":     filterFormat,
 		"round":      filterRound,
 		"abs":        filterAbs,
 		"map":        filterMap,
@@ -815,6 +816,201 @@ func filterReplace(args []Value, kwargs map[string]Value) (Value, error) {
 	}
 
 	return NewString(strings.Replace(s, old, newStr, count)), nil
+}
+
+// filterFormat implements the Jinja2/Python `format` filter: it applies
+// printf-style `%` formatting to the piped string. Positional call arguments
+// fill `%s`, `%d`, ... in order; keyword arguments fill mapping keys such as
+// `%(name)s`. It mirrors CPython's str.__mod__ closely enough for chat-template
+// use:
+//
+//	"%s - %s" | format("Hello?", "Foo!")   -> "Hello? - Foo!"
+//	"%03d"    | format(7)                  -> "007"
+//	"%c"      | format(65)                 -> "A"          (codepoint -> rune)
+//	"%(x)d"   | format(x=42)               -> "42"
+//
+// %s stringifies any value (Python str()), %d/%i/%u take integers,
+// %o/%x/%X format integers in the given base, %e/%E/%f/%F/%g/%G take floats,
+// %c takes an int codepoint or a string, and %r/%a produce a Python-style repr.
+// Flags, width and precision — including the `*` forms that consume an argument —
+// are honoured, and `%%` emits a literal percent.
+func filterFormat(args []Value, kwargs map[string]Value) (Value, error) {
+	if len(args) == 0 {
+		return NewString(""), fmt.Errorf("format: missing value")
+	}
+
+	format := printValue(args[0])
+	pos := args[1:]
+	argi := 0
+	nextPos := func() (Value, error) {
+		if argi >= len(pos) {
+			return Undefined(), fmt.Errorf("format: not enough arguments for format string")
+		}
+		v := pos[argi]
+		argi++
+		return v, nil
+	}
+
+	var b strings.Builder
+	i, n := 0, len(format)
+	for i < n {
+		if format[i] != '%' {
+			b.WriteByte(format[i])
+			i++
+			continue
+		}
+
+		j := i + 1
+		if j < n && format[j] == '%' {
+			b.WriteByte('%')
+			i = j + 1
+			continue
+		}
+
+		// Optional (mapping key).
+		mapKey, haveMapKey := "", false
+		if j < n && format[j] == '(' {
+			k := strings.IndexByte(format[j:], ')')
+			if k < 0 {
+				return NewString(""), fmt.Errorf("format: incomplete mapping key")
+			}
+			mapKey, haveMapKey = format[j+1:j+k], true
+			j += k + 1
+		}
+
+		// Flags.
+		flagStart := j
+		for j < n && strings.IndexByte("#0- +", format[j]) >= 0 {
+			j++
+		}
+		flags := format[flagStart:j]
+
+		// Width (digits or `*`).
+		width := ""
+		if j < n && format[j] == '*' {
+			w, err := nextPos()
+			if err != nil {
+				return NewString(""), err
+			}
+			width = strconv.FormatInt(toInt64(w), 10)
+			j++
+		} else {
+			ws := j
+			for j < n && format[j] >= '0' && format[j] <= '9' {
+				j++
+			}
+			width = format[ws:j]
+		}
+
+		// Precision (`.` then digits or `*`).
+		prec := ""
+		if j < n && format[j] == '.' {
+			j++
+			if j < n && format[j] == '*' {
+				p, err := nextPos()
+				if err != nil {
+					return NewString(""), err
+				}
+				prec = "." + strconv.FormatInt(toInt64(p), 10)
+				j++
+			} else {
+				ps := j
+				for j < n && format[j] >= '0' && format[j] <= '9' {
+					j++
+				}
+				prec = "." + format[ps:j]
+			}
+		}
+
+		// Length modifiers are meaningless in Python — skip them.
+		for j < n && (format[j] == 'h' || format[j] == 'l' || format[j] == 'L') {
+			j++
+		}
+
+		if j >= n {
+			return NewString(""), fmt.Errorf("format: incomplete format specifier")
+		}
+		verb := format[j]
+		j++
+
+		// Resolve the argument for this conversion.
+		var arg Value
+		if haveMapKey {
+			v, ok := kwargs[mapKey]
+			if !ok {
+				return NewString(""), fmt.Errorf("format: no argument for key %q", mapKey)
+			}
+			arg = v
+		} else {
+			v, err := nextPos()
+			if err != nil {
+				return NewString(""), err
+			}
+			arg = v
+		}
+
+		spec := "%" + flags + width + prec
+		switch verb {
+		case 'd', 'i', 'u':
+			b.WriteString(fmt.Sprintf(spec+"d", toInt64(arg)))
+		case 'o', 'x', 'X':
+			b.WriteString(fmt.Sprintf(spec+string(verb), toInt64(arg)))
+		case 'e', 'E', 'f', 'F', 'g', 'G':
+			b.WriteString(fmt.Sprintf(spec+string(verb), toFloat64(arg)))
+		case 'c':
+			if arg.IsString() {
+				b.WriteString(fmt.Sprintf(spec+"s", arg.AsString()))
+			} else {
+				b.WriteString(fmt.Sprintf(spec+"c", rune(toInt64(arg))))
+			}
+		case 's':
+			b.WriteString(fmt.Sprintf(spec+"s", printValue(arg)))
+		case 'r', 'a':
+			b.WriteString(fmt.Sprintf(spec+"s", pyRepr(arg)))
+		default:
+			return NewString(""), fmt.Errorf("format: unsupported format character %q", string(verb))
+		}
+		i = j
+	}
+
+	return NewString(b.String()), nil
+}
+
+// pyRepr renders a Python-style repr for the `%r`/`%a` conversions. Strings are
+// quoted and escaped (single quotes preferred, matching CPython); every other
+// kind falls back to its plain string form.
+func pyRepr(v Value) string {
+	if !v.IsString() {
+		return printValue(v)
+	}
+
+	s := v.AsString()
+	quote := byte('\'')
+	if strings.Contains(s, "'") && !strings.Contains(s, `"`) {
+		quote = '"'
+	}
+
+	var b strings.Builder
+	b.WriteByte(quote)
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case rune(quote):
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte(quote)
+	return b.String()
 }
 
 func filterRound(args []Value, kwargs map[string]Value) (Value, error) {
