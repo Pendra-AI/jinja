@@ -424,6 +424,69 @@ func TestWhitespaceControl(t *testing.T) {
 	}
 }
 
+// TestForLoopBodyTrimming byte-exactly pins how the trim_blocks / lstrip_blocks
+// defaults interact with a {% for %} body, matching reference Python jinja2.
+//
+// The regression this guards (issue #1800): a newline at the end of a loop body
+// is literal loop content and must be preserved. It is NOT the newline that
+// trim_blocks removes — trim_blocks only strips a newline *immediately* after a
+// block tag's `%}`, and here an expression ({{ m.content }}) sits between the
+// `for` tag and the newline. Python jinja2 keeps it (with trim_blocks/
+// lstrip_blocks on or off); so did ardanlabs v1.1.0; v1.6.0 stripped it because
+// its trim pass searched past the expression for the next text segment. The fix
+// restricts the default trim to the immediately adjacent segment.
+//
+// The other cases prove the fix stays targeted: the newline *directly* after a
+// block tag is still collapsed (real trim_blocks), and a run of spaces between
+// an expression and a block tag on the same line is still significant output.
+func TestForLoopBodyTrimming(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			// #1800: the loop-body newline before {% endfor %} survives.
+			name:   "body-trailing-newline-preserved",
+			source: "{% for m in messages %}{{ m.content }}\n{% endfor %}",
+			want:   "hi\n",
+		},
+		{
+			// A run of spaces between an expression and a block tag on the
+			// same line is significant — lstrip_blocks must not eat it.
+			name:   "spaces-before-endfor-preserved",
+			source: "{% for m in messages %}{{ m.content }} {% endfor %}",
+			want:   "hi ",
+		},
+		{
+			// The newline immediately after the {% for %} tag IS collapsed
+			// by trim_blocks, and the indentation before {% endfor %} (first
+			// thing on its line) IS stripped by lstrip_blocks.
+			name:   "newline-directly-after-tag-collapsed",
+			source: "{% for m in messages %}\n  {{ m.content }}\n{% endfor %}",
+			want:   "  hi\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl, err := jinja.Compile(tt.source)
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			result, err := tmpl.Render(map[string]any{
+				"messages": []any{map[string]any{"content": "hi"}},
+			})
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if result != tt.want {
+				t.Errorf("got %q, want %q", result, tt.want)
+			}
+		})
+	}
+}
+
 func TestSlicing(t *testing.T) {
 	source := `{{ items[::-1] | join(",") }}`
 	tmpl, err := jinja.Compile(source)
