@@ -210,6 +210,10 @@ func TestFormatFilter(t *testing.T) {
 		{"char-from-codepoint", `{{ "%c" | format(65) }}`, "A"},
 		{"star-width", `{{ "%*d" | format(4, 2) }}`, "   2"},
 		{"mapping-key", `{{ "%(name)s is %(age)d" | format(name="Kuzco", age=3) }}`, "Kuzco is 3"},
+		{"g-default-precision", `{{ "%g" | format(123456.789) }}`, "123457"},
+		{"g-default-precision-exp", `{{ "%g" | format(1234567.0) }}`, "1.23457e+06"},
+		{"G-default-precision", `{{ "%G" | format(0.00001234567891) }}`, "1.23457E-05"},
+		{"g-explicit-precision", `{{ "%.3g" | format(1234567.0) }}`, "1.23e+06"},
 	}
 
 	for _, tt := range tests {

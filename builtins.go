@@ -956,6 +956,11 @@ func filterFormat(args []Value, kwargs map[string]Value) (Value, error) {
 		case 'o', 'x', 'X':
 			b.WriteString(fmt.Sprintf(spec+string(verb), toInt64(arg)))
 		case 'e', 'E', 'f', 'F', 'g', 'G':
+			// Go's default precision for %g/%G is "shortest round-trip"; C and
+			// Python default to 6 significant digits.
+			if prec == "" && (verb == 'g' || verb == 'G') {
+				spec += ".6"
+			}
 			b.WriteString(fmt.Sprintf(spec+string(verb), toFloat64(arg)))
 		case 'c':
 			if arg.IsString() {
