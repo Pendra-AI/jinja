@@ -189,6 +189,50 @@ func TestStringMethods(t *testing.T) {
 	}
 }
 
+// TestFormatFilter covers the Python/Jinja2 `format` filter (printf-style `%`
+// formatting). Meta's Llama-4 (Scout) chat template and Kimi-K3's template both
+// rely on it — the latter with `'%c' | format(cp)` to turn a codepoint into its
+// rune.
+func TestFormatFilter(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{"single-s", `{{ "%s" | format("x") }}`, "x"},
+		{"two-s", `{{ "%s - %s" | format("Hello?", "Foo!") }}`, "Hello? - Foo!"},
+		{"literal-percent", `{{ "100%% done: %s" | format("ok") }}`, "100% done: ok"},
+		{"int-d", `{{ "%d apples" | format(5) }}`, "5 apples"},
+		{"s-stringifies-int", `{{ "%s apples" | format(5) }}`, "5 apples"},
+		{"zero-pad-width", `{{ "%03d" | format(7) }}`, "007"},
+		{"float-precision", `{{ "%.2f" | format(3.14159) }}`, "3.14"},
+		{"hex", `{{ "%x" | format(255) }}`, "ff"},
+		{"char-from-codepoint", `{{ "%c" | format(65) }}`, "A"},
+		{"star-width", `{{ "%*d" | format(4, 2) }}`, "   2"},
+		{"mapping-key", `{{ "%(name)s is %(age)d" | format(name="Kuzco", age=3) }}`, "Kuzco is 3"},
+		{"g-default-precision", `{{ "%g" | format(123456.789) }}`, "123457"},
+		{"g-default-precision-exp", `{{ "%g" | format(1234567.0) }}`, "1.23457e+06"},
+		{"G-default-precision", `{{ "%G" | format(0.00001234567891) }}`, "1.23457E-05"},
+		{"g-explicit-precision", `{{ "%.3g" | format(1234567.0) }}`, "1.23e+06"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl, err := jinja.Compile(tt.source)
+			if err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			result, err := tmpl.Render(nil)
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			if result != tt.want {
+				t.Errorf("expected %q, got %q", tt.want, result)
+			}
+		})
+	}
+}
+
 func TestDictMethods(t *testing.T) {
 	source := `{%- for key, value in data.items() -%}{{ key }}={{ value }} {% endfor -%}`
 	tmpl, err := jinja.Compile(source)

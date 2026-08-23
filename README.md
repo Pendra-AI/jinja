@@ -102,7 +102,7 @@ See the [examples](examples/) directory for more, including tool calling.
 
 ### Filters
 
-`abs` · `batch` · `capitalize` · `count` · `default` / `d` · `dictsort` · `escape` / `e` · `first` · `float` · `fromjson` · `indent` · `int` · `items` · `join` · `last` · `length` · `list` · `lower` · `map` · `max` · `min` · `reject` · `rejectattr` · `replace` · `reverse` · `round` · `safe` · `select` · `selectattr` · `sort` · `string` · `sum` · `title` · `tojson` · `trim` · `unique` · `upper` · `wordcount`
+`abs` · `batch` · `capitalize` · `count` · `default` / `d` · `dictsort` · `escape` / `e` · `first` · `float` · `format` · `fromjson` · `indent` · `int` · `items` · `join` · `last` · `length` · `list` · `lower` · `map` · `max` · `min` · `reject` · `rejectattr` · `replace` · `reverse` · `round` · `safe` · `select` · `selectattr` · `sort` · `string` · `sum` · `title` · `tojson` · `trim` · `unique` · `upper` · `wordcount`
 
 ### Tests
 
