@@ -1,0 +1,155 @@
+name: Release
+
+# This is the fork's SINGLE release pipeline, matching the convention used by
+# the other Pendra-maintained Go dependencies (pendra-ai/audiocpp-go and
+# pendra-ai/stable-diffusion-go): every merge to main computes the next semantic
+# version from the merged PR's labels / commit subject, tags it, and publishes a
+# GitHub release. Consumers can then pin a readable `vX.Y.Z` instead of an opaque
+# `v0.0.0-<timestamp>-<sha>` pseudo-version.
+#
+#   * push to main       — routine path; computes the next semver, tags, releases.
+#                          Skipped with "release:skip" / "[skip release]" / "#norelease".
+#   * workflow_dispatch  — dry run; reports the version it WOULD cut, tags nothing.
+#
+# Bump level: "release:major" / "#major", "release:minor" / "#minor", else patch.
+#
+# Unlike the sibling repos there are no build artifacts — this is a pure-Go
+# library, so a release is the tag plus GitHub's auto-generated source archives.
+#
+# ---------------------------------------------------------------------------
+# NOTE ON VERSION COLLISIONS WITH UPSTREAM
+#
+# This is a fork of ardanlabs/jinja and it deliberately keeps the UPSTREAM module
+# path (`module github.com/ardanlabs/jinja`) so consumers can use it via a go.mod
+# `replace` directive. That means it also shares upstream's tag namespace: tags
+# v1.0.0..v1.6.0 here are inherited from ardanlabs, and upstream's latest is also
+# v1.6.0.
+#
+# So a tag cut here (e.g. v1.6.1) could one day collide with an upstream release
+# of the same version, where the same version string means different code. This
+# was a deliberate, accepted trade-off in favour of matching the sibling repos'
+# scheme exactly. If that ever bites, the fix is a distinguishing suffix such as
+# v1.6.0-pendra.1 — collision-proof, since upstream would never publish it.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+
+      - name: Install uv
+        # Same rationale as linux.yml: TestRequestsAgainstTemplates renders the
+        # canonical HuggingFace Jinja2 reference output via uv, and skips itself
+        # without it. A release must not be cut on a silently-skipped suite.
+        uses: astral-sh/setup-uv@v3
+
+      # The release is gated on the same checks linux.yml runs, so a tag is only
+      # ever cut from a commit that actually passes them.
+      - name: Test
+        timeout-minutes: 30
+        run: go test -count=1 ./...
+
+      - name: Vet, lint, vuln
+        run: |
+          go vet ./...
+          go tool staticcheck -checks=all ./...
+          go tool govulncheck ./...
+          go fix -diff ./...
+
+      - name: Compute next version
+        id: setup
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          latest="$(git tag -l --sort=-v:refname \
+                      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
+          if [ -z "$latest" ]; then
+            latest="v0.0.0"; has_previous="false"
+          else
+            has_previous="true"
+          fi
+
+          subject="$(git log -1 --pretty=%s "${GITHUB_SHA}")"
+          labels="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                      --jq '.[].labels[].name' 2>/dev/null || true)"
+          has() { printf '%s\n' "$1" | grep -qiF "$2"; }
+
+          if has "$labels" "release:skip" || has "$subject" "[skip release]" || has "$subject" "#norelease"; then
+            echo "Release skip requested."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          if has "$labels" "release:major" || has "$subject" "#major"; then bump="major"
+          elif has "$labels" "release:minor" || has "$subject" "#minor"; then bump="minor"
+          else bump="patch"; fi
+
+          ver="${latest#v}"; IFS='.' read -r major minor patch <<< "$ver"
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          next="v${major}.${minor}.${patch}"
+
+          if git rev-parse -q --verify "refs/tags/${next}" >/dev/null; then
+            echo "Tag ${next} exists; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          if [ "${GITHUB_EVENT_NAME}" != "push" ]; then
+            echo "Manual run: would cut ${next} (bump=${bump}, from ${latest}). Tagging nothing."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          echo "Next version: $next (bump=$bump, from $latest)"
+          echo "skip=false"                 >> "$GITHUB_OUTPUT"
+          echo "version=$next"              >> "$GITHUB_OUTPUT"
+          echo "previous=$latest"           >> "$GITHUB_OUTPUT"
+          echo "has_previous=$has_previous" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and release
+        if: steps.setup.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.setup.outputs.version }}
+          PREVIOUS: ${{ steps.setup.outputs.previous }}
+          HAS_PREVIOUS: ${{ steps.setup.outputs.has_previous }}
+        run: |
+          set -euo pipefail
+          notes="Pendra fork of ardanlabs/jinja. Consume via a go.mod \`replace\`:
+
+          \`\`\`
+          replace github.com/ardanlabs/jinja => github.com/pendra-ai/jinja ${VERSION}
+          \`\`\`"
+          pr_body="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+                      --jq '.[0].body // ""' 2>/dev/null || true)"
+          [ -n "$pr_body" ] && notes="${notes}"$'\n\n'"${pr_body}"
+
+          args=(--target "$GITHUB_SHA" --title "$VERSION" --notes "$notes" --generate-notes)
+          [ "$HAS_PREVIOUS" = "true" ] && args+=(--notes-start-tag "$PREVIOUS")
+          gh release create "$VERSION" "${args[@]}"
+          echo "Released $VERSION" >> "$GITHUB_STEP_SUMMARY"

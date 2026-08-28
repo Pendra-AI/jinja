@@ -19,6 +19,43 @@ hello@ardanlabs.com
 go get github.com/ardanlabs/jinja
 ```
 
+## Pendra fork
+
+This is Pendra's fork of [ardanlabs/jinja](https://github.com/ardanlabs/jinja). It keeps the
+**upstream module path** (`module github.com/ardanlabs/jinja`) on purpose, so it is consumed
+through a `go.mod` `replace` rather than by importing a different path:
+
+```
+require github.com/ardanlabs/jinja v1.6.0
+
+replace github.com/ardanlabs/jinja => github.com/pendra-ai/jinja vX.Y.Z
+```
+
+### Releases
+
+Every merge to `main` cuts a release, matching the convention in `pendra-ai/audiocpp-go` and
+`pendra-ai/stable-diffusion-go`. The version is computed from the merged PR's labels or the
+commit subject:
+
+| Signal | Bump |
+|---|---|
+| `release:major` label or `#major` in the subject | major |
+| `release:minor` label or `#minor` | minor |
+| *(default)* | patch |
+| `release:skip` label, `[skip release]` or `#norelease` | no release |
+
+A `workflow_dispatch` run is a dry run — it reports the version it would cut and tags nothing.
+
+Pin a real `vX.Y.Z` in the `replace` above rather than a `v0.0.0-<timestamp>-<sha>`
+pseudo-version.
+
+> **Version collisions with upstream.** Because the fork keeps upstream's module path it also
+> shares its tag namespace — `v1.0.0`–`v1.6.0` here are inherited from ardanlabs. A tag cut
+> here could one day collide with an upstream release of the same version. That is an accepted
+> trade-off in favour of matching the sibling repos' scheme; the escape hatch, if it ever
+> bites, is a distinguishing suffix such as `v1.6.0-pendra.1`.
+
+
 ## Quick Start
 
 The API has two steps: compile a template once, then render it with data as many times as needed. Compiled templates are safe for concurrent use.
