@@ -49,11 +49,17 @@ A `workflow_dispatch` run is a dry run — it reports the version it would cut a
 Pin a real `vX.Y.Z` in the `replace` above rather than a `v0.0.0-<timestamp>-<sha>`
 pseudo-version.
 
-> **Version collisions with upstream.** Because the fork keeps upstream's module path it also
-> shares its tag namespace — `v1.0.0`–`v1.6.0` here are inherited from ardanlabs. A tag cut
-> here could one day collide with an upstream release of the same version. That is an accepted
-> trade-off in favour of matching the sibling repos' scheme; the escape hatch, if it ever
-> bites, is a distinguishing suffix such as `v1.6.0-pendra.1`.
+### Version lineage
+
+The fork's tags are its own — it inherited none from upstream. The line was seeded by hand at
+**`v1.7.0`**, chosen to sit just above the upstream **`v1.6.0`** this fork is based on, so the
+number itself hints at the upstream base. Releases continue from there (`v1.7.1`, `v1.8.0`, …).
+
+> **Version collisions with upstream.** Because the version line deliberately tracks upstream's
+> numbering, a tag cut here could one day collide with an upstream release of the same version,
+> where one version string would mean two different trees. That is an accepted trade-off in
+> favour of a readable, upstream-aligned number. The escape hatch, if it ever bites, is a
+> distinguishing suffix such as `v1.7.0-pendra.1` — upstream would never publish it.
 
 
 ## Quick Start

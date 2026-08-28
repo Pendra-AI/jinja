@@ -21,15 +21,19 @@ name: Release
 #
 # This is a fork of ardanlabs/jinja and it deliberately keeps the UPSTREAM module
 # path (`module github.com/ardanlabs/jinja`) so consumers can use it via a go.mod
-# `replace` directive. That means it also shares upstream's tag namespace: tags
-# v1.0.0..v1.6.0 here are inherited from ardanlabs, and upstream's latest is also
-# v1.6.0.
+# `replace` directive.
 #
-# So a tag cut here (e.g. v1.6.1) could one day collide with an upstream release
-# of the same version, where the same version string means different code. This
-# was a deliberate, accepted trade-off in favour of matching the sibling repos'
-# scheme exactly. If that ever bites, the fix is a distinguishing suffix such as
-# v1.6.0-pendra.1 — collision-proof, since upstream would never publish it.
+# The fork carries NO tags of its own from upstream — its tag namespace started
+# empty, and the first release here was seeded by hand at v1.7.0 so the number
+# sits just above the upstream v1.6.0 this fork is based on. That is the only
+# signal of the upstream base; nothing enforces it.
+#
+# Because the version line is chosen to track upstream's numbering, a tag cut
+# here could one day collide with an upstream release of the same version, where
+# the same version string means different code. That is an accepted trade-off in
+# favour of a readable, upstream-aligned number. If it ever bites, the fix is a
+# distinguishing suffix such as v1.7.0-pendra.1 — collision-proof, since upstream
+# would never publish it.
 # ---------------------------------------------------------------------------
 
 on:
