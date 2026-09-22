@@ -346,45 +346,45 @@ func filterTojson(args []Value, kwargs map[string]Value) (Value, error) {
 		return NewString(""), nil
 	}
 
-	// The indented form is used rarely in chat templates; fall back to
-	// the reflection-based encoder for correctness instead of duplicating
-	// indent state in the direct encoder.
-	if indent, ok := kwargs["indent"]; ok && !indent.IsNone() && !indent.IsUndefined() {
-		n := int(toInt64(indent))
-		data, err := json.MarshalIndent(valueToGo(args[0]), "", strings.Repeat(" ", n))
-		if err != nil {
-			return NewString(""), nil
-		}
-		return NewString(string(data)), nil
+	// indent < 0 is the compact form; indent >= 0 is Python's indented form,
+	// where indent=0 still breaks lines but indents nothing.
+	indent := -1
+	if v, ok := kwargs["indent"]; ok && !v.IsNone() && !v.IsUndefined() {
+		indent = max(int(toInt64(v)), 0)
 	}
 
-	// Direct Value-tree encoder. Bypasses valueToGo's intermediate
-	// map[string]any/[]any allocations and json.Marshal's reflection
-	// path. Per-render allocations drop from ~80 (Dict.Set + valueToGo
-	// + reflect) to a handful (one strings.Builder grow + one Marshal
-	// per leaf string for escaping).
+	// Direct Value-tree encoder. Bypasses an intermediate map[string]any/[]any
+	// tree and json.Marshal's reflection path, and walks Dict.Keys so a dict's
+	// insertion order survives, as it does in Python.
 	var sb strings.Builder
-	if err := encodeValueJSON(&sb, args[0]); err != nil {
+	if err := encodeValueJSON(&sb, args[0], indent, 0); err != nil {
 		return NewString(""), nil
 	}
 	return NewString(sb.String()), nil
 }
 
 // encodeValueJSON writes the JSON encoding of v directly into sb without
-// going through an intermediate Go-typed tree.
+// going through an intermediate Go-typed tree. indent < 0 selects the compact
+// form; otherwise each nesting level is indented by indent spaces, and depth is
+// the current nesting level.
 //
 // The output matches Python json.dumps's defaults so that prompts rendered by
 // this engine are byte-for-byte identical to those produced by HuggingFace's
 // reference Jinja2 implementation:
 //
-//   - Item separator is ", " (with a trailing space), key/value separator is
-//     ": " — Python's default when no indent is given.
+//   - Dict keys are emitted in insertion order, never sorted (sort_keys=False).
+//   - Compact: item separator ", " (with a trailing space), key/value
+//     separator ": ".
+//   - Indented (indent=N): item separator "," followed by a newline, key/value
+//     separator ": ", every item on its own line indented N spaces per level,
+//     the closing bracket on its own line at the parent's level, and an empty
+//     list/dict still written "[]" / "{}".
 //   - HTML metacharacters '&', '<', '>' are NOT escaped to \u0026 / \u003c /
 //     \u003e (Go's encoding/json escapes these by default; Python does not).
 //
-// Both differences would otherwise change the tokenization of every tool
-// definition that ends up in a chat prompt.
-func encodeValueJSON(sb *strings.Builder, v Value) error {
+// Any of these differences would otherwise change the tokenization of every
+// tool definition that ends up in a chat prompt.
+func encodeValueJSON(sb *strings.Builder, v Value, indent, depth int) error {
 	switch v.kind {
 	case KindUndefined, KindNone, KindCallable:
 		sb.WriteString("null")
@@ -416,39 +416,81 @@ func encodeValueJSON(sb *strings.Builder, v Value) error {
 		return encodeJSONString(sb, v.AsString())
 
 	case KindList:
+		items := v.AsList().Items
+		if len(items) == 0 {
+			sb.WriteString("[]")
+			return nil
+		}
 		sb.WriteByte('[')
-		for i, item := range v.AsList().Items {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
-			if err := encodeValueJSON(sb, item); err != nil {
+		for i, item := range items {
+			writeJSONItemSeparator(sb, i, indent, depth+1)
+			if err := encodeValueJSON(sb, item, indent, depth+1); err != nil {
 				return err
 			}
 		}
+		writeJSONClose(sb, indent, depth)
 		sb.WriteByte(']')
 		return nil
 
 	case KindDict:
-		sb.WriteByte('{')
 		d := v.AsDict()
+		if len(d.Keys) == 0 {
+			sb.WriteString("{}")
+			return nil
+		}
+		sb.WriteByte('{')
 		for i, key := range d.Keys {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
+			writeJSONItemSeparator(sb, i, indent, depth+1)
 			if err := encodeJSONString(sb, key); err != nil {
 				return err
 			}
 			sb.WriteString(": ")
-			if err := encodeValueJSON(sb, d.Data[key]); err != nil {
+			if err := encodeValueJSON(sb, d.Data[key], indent, depth+1); err != nil {
 				return err
 			}
 		}
+		writeJSONClose(sb, indent, depth)
 		sb.WriteByte('}')
 		return nil
 	}
 
 	sb.WriteString("null")
 	return nil
+}
+
+// writeJSONItemSeparator writes what precedes the i-th item of a list or dict
+// whose items sit at nesting level depth: ", " between compact items, or, when
+// indented, a "," after the previous item and then a newline and the item's
+// indentation.
+func writeJSONItemSeparator(sb *strings.Builder, i, indent, depth int) {
+	if indent < 0 {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		return
+	}
+	if i > 0 {
+		sb.WriteByte(',')
+	}
+	sb.WriteByte('\n')
+	writeJSONIndent(sb, indent*depth)
+}
+
+// writeJSONClose writes the newline and indentation that precede the closing
+// bracket of a non-empty list or dict at nesting level depth. Compact output
+// has none.
+func writeJSONClose(sb *strings.Builder, indent, depth int) {
+	if indent < 0 {
+		return
+	}
+	sb.WriteByte('\n')
+	writeJSONIndent(sb, indent*depth)
+}
+
+func writeJSONIndent(sb *strings.Builder, n int) {
+	for range n {
+		sb.WriteByte(' ')
+	}
 }
 
 // encodeJSONString writes the JSON encoding of s without HTML-escaping (no
@@ -1490,40 +1532,6 @@ func containsValue(container, item Value) bool {
 		return strings.Contains(container.AsString(), item.AsString())
 	}
 	return false
-}
-
-// valueToGo converts a Value back to a plain Go type suitable for
-// json.Marshal.
-func valueToGo(v Value) any {
-	switch v.kind {
-	case KindUndefined, KindNone:
-		return nil
-	case KindBool:
-		return v.AsBool()
-	case KindInt:
-		return v.AsInt()
-	case KindFloat:
-		return v.AsFloat()
-	case KindString:
-		return v.AsString()
-	case KindList:
-		list := v.AsList()
-		out := make([]any, list.Len())
-		for i, item := range list.Items {
-			out[i] = valueToGo(item)
-		}
-		return out
-	case KindDict:
-		d := v.AsDict()
-		out := make(map[string]any, d.Len())
-		for _, key := range d.Keys {
-			out[key] = valueToGo(d.Data[key])
-		}
-		return out
-	case KindCallable:
-		return nil
-	}
-	return nil
 }
 
 // printValue converts a Value to its template output string. Unlike
