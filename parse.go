@@ -41,7 +41,102 @@ type tok struct {
 	val  string
 }
 
-func tokenizeExpr(s string) []tok {
+// decodeEscape decodes the backslash escape whose first character after the
+// backslash is s[i], appends the result to b, and returns the index of the
+// first byte after the escape.
+//
+// Jinja2 decodes string literals with Python's "unicode-escape" codec, so this
+// follows Python string-literal semantics:
+//
+//   - \\ \' \" \a \b \f \n \r \t \v are the usual control characters.
+//   - \xNN, \uNNNN and \UNNNNNNNN take exactly 2, 4 and 8 hex digits and denote
+//     a Unicode code point, written as UTF-8 (so "\xe9" is "é", two bytes, not
+//     the single byte 0xE9).
+//   - \o, \oo and \ooo (octal, so \0 is NUL) also denote a code point.
+//   - A backslash before a line break (LF, CRLF or CR) is a line continuation:
+//     both are dropped. Jinja2 normalises line breaks to LF before decoding.
+//   - Any other escape, including \8, \9 and \N{NAME}, is kept as written,
+//     backslash included. Python decodes \N{NAME} by Unicode character name;
+//     this engine has no name table, so it is left literal. A backslash before
+//     a non-ASCII character is also kept as written (Jinja2 would turn "\é"
+//     into the text \xe9, an artefact of its ASCII round trip).
+//
+// A truncated \x, \u or \U escape, or a \U beyond U+10FFFF, is an error, as it
+// is in Jinja2 ("truncated \xXX escape"). llama.cpp's template engine is
+// stricter still: it decodes \x but rejects \u, \U, octal and unknown
+// escapes, so no template that works there reaches these errors. A surrogate code point (\ud800-\udfff) cannot be held in a Go string
+// and is written as U+FFFD.
+func decodeEscape(s string, i int, b *strings.Builder) (int, error) {
+	c := s[i]
+	switch c {
+	case '\\', '\'', '"':
+		b.WriteByte(c)
+	case 'a':
+		b.WriteByte('\a')
+	case 'b':
+		b.WriteByte('\b')
+	case 'f':
+		b.WriteByte('\f')
+	case 'n':
+		b.WriteByte('\n')
+	case 'r':
+		b.WriteByte('\r')
+	case 't':
+		b.WriteByte('\t')
+	case 'v':
+		b.WriteByte('\v')
+	case '\n':
+		// Line continuation.
+	case '\r':
+		// Line continuation; a CRLF counts as one line break.
+		if i+1 < len(s) && s[i+1] == '\n' {
+			return i + 2, nil
+		}
+	case 'x', 'u', 'U':
+		form := `\xXX`
+		switch c {
+		case 'u':
+			form = `\uXXXX`
+		case 'U':
+			form = `\UXXXXXXXX`
+		}
+		start := i + 1
+		end := start + len(form) - 2 // len(form) - 2 is the hex digit count
+		if end > len(s) || !isHex(s[start:end]) {
+			return 0, fmt.Errorf("string literal: truncated %s escape", form)
+		}
+		cp, _ := strconv.ParseUint(s[start:end], 16, 32)
+		if cp > unicode.MaxRune {
+			return 0, fmt.Errorf("string literal: illegal Unicode character \\%c%s", c, s[start:end])
+		}
+		b.WriteRune(rune(cp))
+		return end, nil
+	case '0', '1', '2', '3', '4', '5', '6', '7':
+		end := i + 1
+		for end < len(s) && end < i+3 && s[end] >= '0' && s[end] <= '7' {
+			end++
+		}
+		cp, _ := strconv.ParseUint(s[i:end], 8, 32)
+		b.WriteRune(rune(cp))
+		return end, nil
+	default:
+		b.WriteByte('\\')
+		b.WriteByte(c)
+	}
+	return i + 1, nil
+}
+
+func isHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func tokenizeExpr(s string) ([]tok, error) {
 	var tokens []tok
 	i := 0
 
@@ -61,25 +156,14 @@ func tokenizeExpr(s string) []tok {
 			var b strings.Builder
 			for i < len(s) && s[i] != quote {
 				if s[i] == '\\' && i+1 < len(s) {
-					i++
-					switch s[i] {
-					case 'n':
-						b.WriteByte('\n')
-					case 't':
-						b.WriteByte('\t')
-					case '\\':
-						b.WriteByte('\\')
-					case '\'':
-						b.WriteByte('\'')
-					case '"':
-						b.WriteByte('"')
-					default:
-						b.WriteByte('\\')
-						b.WriteByte(s[i])
+					next, err := decodeEscape(s, i+1, &b)
+					if err != nil {
+						return nil, err
 					}
-				} else {
-					b.WriteByte(s[i])
+					i = next
+					continue
 				}
+				b.WriteByte(s[i])
 				i++
 			}
 			if i < len(s) {
@@ -181,7 +265,7 @@ func tokenizeExpr(s string) []tok {
 	}
 
 	tokens = append(tokens, tok{kind: tokEOF, val: ""})
-	return tokens
+	return tokens, nil
 }
 
 // =============================================================================
@@ -236,7 +320,10 @@ func parseExpr(s string) (expr, error) {
 		return &litExpr{val: None()}, nil
 	}
 
-	tokens := tokenizeExpr(s)
+	tokens, err := tokenizeExpr(s)
+	if err != nil {
+		return nil, err
+	}
 	p := newExprParser(tokens)
 	e, err := p.parseExpression()
 	if err != nil {

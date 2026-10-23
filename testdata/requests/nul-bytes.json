@@ -1,0 +1,13 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "Be brief.\u0000"
+    },
+    {
+      "role": "user",
+      "content": "ab\u0000cd and the text ab\\x00cd stays"
+    }
+  ],
+  "model": "nul-bytes"
+}
