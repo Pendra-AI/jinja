@@ -861,10 +861,22 @@ func (p *exprParser) parseAtom() (expr, error) {
 		return &litExpr{val: NewFloat(f)}, nil
 	}
 
-	// String literal.
+	// String literal. Adjacent literals concatenate, as in Jinja2's
+	// parse_primary ("a" "b" is "ab"), which is also what makes a Python-style
+	// """triple-quoted""" string work: it lexes as "", "...", "".
 	if t.kind == tokString {
 		p.advance()
-		return &litExpr{val: NewString(t.val)}, nil
+		val := t.val
+		if p.peek().kind == tokString {
+			var b strings.Builder
+			b.WriteString(val)
+			for p.peek().kind == tokString {
+				b.WriteString(p.peek().val)
+				p.advance()
+			}
+			val = b.String()
+		}
+		return &litExpr{val: NewString(val)}, nil
 	}
 
 	// Identifier.
