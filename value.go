@@ -82,6 +82,26 @@ func NewCallable(name string, fn func(args []Value, kwargs map[string]Value) (Va
 	return Value{kind: KindCallable, v: Callable{Name: name, Fn: fn}}
 }
 
+// newOrderedCallable returns a callable that receives its keyword arguments in
+// call order, as Jinja2 keeps them: dict(b=1, a=2) iterates b then a. A caller
+// that only holds a map (a {% call %} block) gets the keys sorted, so the order
+// is at least deterministic.
+func newOrderedCallable(name string, fn func(args []Value, kwargs *Dict) (Value, error)) Value {
+	mapFn := func(args []Value, kwargs map[string]Value) (Value, error) {
+		keys := make([]string, 0, len(kwargs))
+		for k := range kwargs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		d := NewDict().AsDict()
+		for _, k := range keys {
+			d.Set(k, kwargs[k])
+		}
+		return fn(args, d)
+	}
+	return Value{kind: KindCallable, v: Callable{Name: name, Fn: mapFn, orderedFn: fn}}
+}
+
 // =============================================================================
 
 // IsUndefined reports whether v is undefined.
@@ -347,6 +367,10 @@ func (d *Dict) OrderedKeys() []string {
 type Callable struct {
 	Name string
 	Fn   func(args []Value, kwargs map[string]Value) (Value, error)
+
+	// orderedFn, when set, is called instead of Fn by a call expression, with
+	// the keyword arguments in the order they were written.
+	orderedFn func(args []Value, kwargs *Dict) (Value, error)
 }
 
 // =============================================================================

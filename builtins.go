@@ -33,7 +33,7 @@ func registerGlobals(s *scope) {
 	s.set("raise_exception", NewCallable("raise_exception", builtinRaiseException))
 	s.set("range", NewCallable("range", builtinRange))
 	s.set("joiner", NewCallable("joiner", builtinJoiner))
-	s.set("dict", NewCallable("dict", builtinDict))
+	s.set("dict", newOrderedCallable("dict", builtinDict))
 	s.set("cycler", NewCallable("cycler", builtinCycler))
 	s.set("strftime_now", NewCallable("strftime_now", builtinStrftimeNow))
 }
@@ -107,11 +107,37 @@ func builtinJoiner(args []Value, kwargs map[string]Value) (Value, error) {
 	}), nil
 }
 
-func builtinDict(args []Value, kwargs map[string]Value) (Value, error) {
+// builtinDict is Python's dict(): an optional mapping or iterable of key/value
+// pairs, shallow-copied, then the keyword arguments, which win on a clash.
+// Chat templates copy a message with one field changed this way
+// (dict(msg, content=…)); dropping the mapping loses the message's role.
+func builtinDict(args []Value, kwargs *Dict) (Value, error) {
+	if len(args) > 1 {
+		return Undefined(), fmt.Errorf("dict expected at most 1 argument, got %d", len(args))
+	}
 	d := NewDict()
 	dict := d.AsDict()
-	for k, v := range kwargs {
-		dict.Set(k, v)
+	if len(args) == 1 {
+		switch src := args[0]; {
+		case src.IsDict():
+			sd := src.AsDict()
+			for _, k := range sd.Keys {
+				dict.Set(k, sd.Data[k])
+			}
+		case src.IsList():
+			for i, item := range src.AsList().Items {
+				if !item.IsList() || len(item.AsList().Items) != 2 {
+					return Undefined(), fmt.Errorf("dict: sequence element #%d is not a key/value pair", i)
+				}
+				pair := item.AsList().Items
+				dict.Set(printValue(pair[0]), pair[1])
+			}
+		default:
+			return Undefined(), fmt.Errorf("dict: %s is not a mapping", src.String())
+		}
+	}
+	for _, k := range kwargs.Keys {
+		dict.Set(k, kwargs.Data[k])
 	}
 	return d, nil
 }

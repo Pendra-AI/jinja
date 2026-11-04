@@ -889,6 +889,18 @@ func (e *evaluator) evalCallExpr(n *callExpr) (Value, error) {
 		args[i] = v
 	}
 
+	if c := fn.AsCallable(); c.orderedFn != nil {
+		kwargs := NewDict().AsDict()
+		for _, kw := range n.kwargs {
+			v, err := e.evalExpr(kw.value)
+			if err != nil {
+				return Undefined(), err
+			}
+			kwargs.Set(kw.name, v)
+		}
+		return c.orderedFn(args, kwargs)
+	}
+
 	var kwargs map[string]Value
 	if len(n.kwargs) > 0 {
 		kwargs = make(map[string]Value, len(n.kwargs))
